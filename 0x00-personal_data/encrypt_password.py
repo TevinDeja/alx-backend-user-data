@@ -1,36 +1,19 @@
 #!/usr/bin/env python3
 """
-Module for secure password management
+A module for securing user credentials
 """
-import hashlib
-import os
+import bcrypt
 
-def encrypt_password(password: str) -> bytes:
-    """
-    Generate a securely hashed version of the input password
-    
-    Args:
-        password (str): The plain text password to hash
-    
-    Returns:
-        bytes: The salted and hashed password
-    """
-    salt = os.urandom(32)
-    key = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt, 100000)
-    return salt + key
 
-def verify_password(stored_password: bytes, provided_password: str) -> bool:
+def hash_password(password: str) -> bytes:
     """
-    Check if the provided password matches the stored hashed password
-    
-    Args:
-        stored_password (bytes): The previously hashed password
-        provided_password (str): The password to verify
-    
-    Returns:
-        bool: True if the passwords match, False otherwise
+    Generates a salted hash of the input password
     """
-    salt = stored_password[:32]
-    key = stored_password[32:]
-    new_key = hashlib.pbkdf2_hmac('sha256', provided_password.encode('utf-8'), salt, 100000)
-    return key == new_key
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+
+
+def is_valid(hashed_password: bytes, password: str) -> bool:
+    """
+    Verifies if the provided password matches the stored hash
+    """
+    return bcrypt.checkpw(password.encode('utf-8'), hashed_password)
