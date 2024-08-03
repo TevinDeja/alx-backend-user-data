@@ -8,12 +8,13 @@ import logging
 import mysql.connector
 from typing import List
 
+
 patterns = {
     'extract': lambda x, y: r'(?P<field>{})=[^{}]*'.format('|'.join(x), y),
     'replace': lambda x: r'\g<field>={}'.format(x),
 }
-
 PII_FIELDS = ("name", "email", "phone", "ssn", "password")
+
 
 def filter_datum(fields: List[str], redaction: str, message: str,
                  separator: str) -> str:
@@ -22,6 +23,7 @@ def filter_datum(fields: List[str], redaction: str, message: str,
     """
     extract, replace = (patterns["extract"], patterns["replace"])
     return re.sub(extract(fields, separator), replace(redaction), message)
+
 
 def get_logger() -> logging.Logger:
     """
@@ -35,6 +37,7 @@ def get_logger() -> logging.Logger:
     logger.addHandler(stream_handler)
     return logger
 
+
 def get_db() -> mysql.connector.connection.MySQLConnection:
     """ establish connection to MySQL database """
     return mysql.connector.connect(
@@ -43,6 +46,7 @@ def get_db() -> mysql.connector.connection.MySQLConnection:
         user=os.getenv("PERSONAL_DATA_DB_USERNAME", "localhost"),
         password=os.getenv("PERSONAL_DATA_DB_PASSWORD", ""),
     )
+
 
 def main():
     """
@@ -57,9 +61,10 @@ def main():
     for user in users:
         logger.log(logging.INFO, user[0])
 
+
 class RedactingFormatter(logging.Formatter):
-    """ Custom Formatter for redacting sensitive information
-        """
+    """Custom Formatter for redacting sensitive information
+    """
 
     REDACTION = "***"
     FORMAT = "[HOLBERTON] %(name)s %(levelname)s %(asctime)-15s: %(message)s"
