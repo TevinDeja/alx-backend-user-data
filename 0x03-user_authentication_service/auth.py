@@ -1,93 +1,120 @@
 #!/usr/bin/env python3
-"""A module for library management routines."""
-
-import hashlib
-from datetime import datetime, timedelta
+"""UserManager Module
+"""
+import bcrypt
+from uuid import uuid4
 from typing import Union
 from sqlalchemy.orm.exc import NoResultFound
-from database import Database
-from book import Book
-from member import Member
 
-def generate_member_id() -> str:
-    """Generates a unique member ID."""
-    return hashlib.md5(str(datetime.now()).encode()).hexdigest()[:8]
+from db import DB
+from user import User
 
-def calculate_due_date(days: int = 14) -> str:
-    """Calculates the due date for a book loan."""
-    return (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d")
 
-class LibraryManager:
-    """LibraryManager class to interact with the library database."""
+def _hash_password(password: str) -> bytes:
+    """Hashes a password.
+    """
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt())
+
+
+def _generate_uuid() -> str:
+    """Generates a UUID.
+    """
+    return str(uuid4())
+
+
+class Auth:
+    """Auth class to interact with the authentication database.
+    """
 
     def __init__(self):
-        """Initializes a new LibraryManager instance."""
-        self._db = Database()
+        """Initializes a new Auth instance.
+        """
+        self._db = DB()
 
-    def add_book(self, title: str, author: str, isbn: str) -> Book:
-        """Adds a new book to the library."""
+    def register_user(self, email: str, password: str) -> User:
+        """Adds a new user to the database.
+        """
         try:
-            self._db.find_book_by(isbn=isbn)
+            self._db.find_user_by(email=email)
         except NoResultFound:
-            return self._db.add_book(title, author, isbn)
-        raise ValueError(f"Book with ISBN {isbn} already exists")
+            return self._db.add_user(email, _hash_password(password))
+        raise ValueError("User {} already exists".format(email))
 
-    def register_member(self, name: str, email: str) -> Member:
-        """Registers a new library member."""
+    def valid_login(self, email: str, password: str) -> bool:
+        """Checks if a user's login details are valid.
+        """
+        user = None
         try:
-            self._db.find_member_by(email=email)
-        except NoResultFound:
-            member_id = generate_member_id()
-            return self._db.add_member(member_id, name, email)
-        raise ValueError(f"Member with email {email} already exists")
-
-    def loan_book(self, member_id: str, isbn: str) -> bool:
-        """Processes a book loan."""
-        try:
-            member = self._db.find_member_by(member_id=member_id)
-            book = self._db.find_book_by(isbn=isbn)
-            if book.is_available:
-                due_date = calculate_due_date()
-                self._db.update_book(book.id, is_available=False)
-                self._db.add_loan(member.id, book.id, due_date)
-                return True
-            return False
+            user = self._db.find_user_by(email=email)
+            if user is not None:
+                return bcrypt.checkpw(
+                    password.encode("utf-8"),
+                    user.hashed_password,
+                )
         except NoResultFound:
             return False
+        return False
 
-    def return_book(self, isbn: str) -> Union[float, None]:
-        """Processes a book return, calculates fine if any."""
+    def create_session(self, email: str) -> str:
+        """Creates a new session for a user.
+        """
+        user = None
         try:
-            book = self._db.find_book_by(isbn=isbn)
-            loan = self._db.find_active_loan_by(book_id=book.id)
-            self._db.update_book(book.id, is_available=True)
-            self._db.close_loan(loan.id)
-            
-            due_date = datetime.strptime(loan.due_date, "%Y-%m-%d")
-            if datetime.now() > due_date:
-                days_overdue = (datetime.now() - due_date).days
-                return days_overdue * 0.5  # $0.50 per day
-            return 0.0
+            user = self._db.find_user_by(email=email)
         except NoResultFound:
             return None
+        if user is None:
+            return None
+        session_id = _generate_uuid()
+        self._db.update_user(user.id, session_id=session_id)
+        return session_id
 
-    def get_member_loans(self, member_id: str) -> list:
-        """Retrieves all active loans for a member."""
+    def get_user_from_session_id(self, session_id: str) -> Union[User, None]:
+        """Retrieves a user based on a given session ID.
+        """
+        user = None
+        if session_id is None:
+            return None
         try:
-            member = self._db.find_member_by(member_id=member_id)
-            return self._db.get_active_loans_for_member(member.id)
+            user = self._db.find_user_by(session_id=session_id)
         except NoResultFound:
-            return []
+            return None
+        return user
 
-    def search_books(self, keyword: str) -> list:
-        """Searches for books by title or author."""
-        return self._db.search_books(keyword)
+    def destroy_session(self, user_id: int) -> None:
+        """Destroys a session associated with a given user.
+        """
+        if user_id is None:
+            return None
+        self._db.update_user(user_id, session_id=None)
 
-    def update_member_info(self, member_id: str, **kwargs) -> bool:
-        """Updates a member's information."""
+    def get_reset_password_token(self, email: str) -> str:
+        """Generates a password reset token for a user.
+        """
+        user = None
         try:
-            member = self._db.find_member_by(member_id=member_id)
-            self._db.update_member(member.id, **kwargs)
-            return True
+            user = self._db.find_user_by(email=email)
         except NoResultFound:
-            return False
+            user = None
+        if user is None:
+            raise ValueError()
+        reset_token = _generate_uuid()
+        self._db.update_user(user.id, reset_token=reset_token)
+        return reset_token
+
+    def update_password(self, reset_token: str, password: str) -> None:
+        """Updates a user's password given the user's reset token.
+        """
+        user = None
+        try:
+            user = self._db.find_user_by(reset_token=reset_token)
+        except NoResultFound:
+            user = None
+        if user is None:
+            raise ValueError()
+        new_password_hash = _hash_password(password)
+        self._db.update_user(
+            user.id,
+            hashed_password=new_password_hash,
+            reset_token=None,
+        )
