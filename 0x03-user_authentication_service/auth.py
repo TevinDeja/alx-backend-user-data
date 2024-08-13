@@ -1,99 +1,93 @@
 #!/usr/bin/env python3
-"""
-UserManager Module
-"""
-from database import Database
-from random import randint
-from account import Account
-from cryptography.fernet import Fernet
-from typing import Optional
+"""A module for library management routines."""
+
+import hashlib
+from datetime import datetime, timedelta
+from typing import Union
 from sqlalchemy.orm.exc import NoResultFound
+from database import Database
+from book import Book
+from member import Member
 
-def generate_account_number() -> str:
-    """
-    Generate a random 10-digit account number
-    """
-    return str(randint(1000000000, 9999999999))
+def generate_member_id() -> str:
+    """Generates a unique member ID."""
+    return hashlib.md5(str(datetime.now()).encode()).hexdigest()[:8]
 
-def encrypt_pin(pin: str) -> bytes:
-    """
-    Encrypt the PIN using Fernet
-    """
-    key = Fernet.generate_key()
-    f = Fernet(key)
-    return f.encrypt(pin.encode())
+def calculate_due_date(days: int = 14) -> str:
+    """Calculates the due date for a book loan."""
+    return (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d")
 
-class UserManager:
-    """
-    UserManager class to handle user account operations
-    """
+class LibraryManager:
+    """LibraryManager class to interact with the library database."""
+
     def __init__(self):
+        """Initializes a new LibraryManager instance."""
         self._db = Database()
 
-    def create_account(self, name: str, initial_balance: float, pin: str) -> Account:
-        """
-        Create a new account with name, initial balance, and PIN
-        """
+    def add_book(self, title: str, author: str, isbn: str) -> Book:
+        """Adds a new book to the library."""
         try:
-            self._db.find_account_by(name=name)
-            raise ValueError(f"Account for {name} already exists")
+            self._db.find_book_by(isbn=isbn)
         except NoResultFound:
-            account_number = generate_account_number()
-            encrypted_pin = encrypt_pin(pin)
-            return self._db.add_account(name, account_number, initial_balance, encrypted_pin)
+            return self._db.add_book(title, author, isbn)
+        raise ValueError(f"Book with ISBN {isbn} already exists")
 
-    def verify_pin(self, account_number: str, pin: str) -> bool:
-        """
-        Verify the PIN for a given account number
-        """
+    def register_member(self, name: str, email: str) -> Member:
+        """Registers a new library member."""
         try:
-            account = self._db.find_account_by(account_number=account_number)
-            f = Fernet(account.encrypted_pin[:44])
-            decrypted_pin = f.decrypt(account.encrypted_pin[44:]).decode()
-            return pin == decrypted_pin
+            self._db.find_member_by(email=email)
+        except NoResultFound:
+            member_id = generate_member_id()
+            return self._db.add_member(member_id, name, email)
+        raise ValueError(f"Member with email {email} already exists")
+
+    def loan_book(self, member_id: str, isbn: str) -> bool:
+        """Processes a book loan."""
+        try:
+            member = self._db.find_member_by(member_id=member_id)
+            book = self._db.find_book_by(isbn=isbn)
+            if book.is_available:
+                due_date = calculate_due_date()
+                self._db.update_book(book.id, is_available=False)
+                self._db.add_loan(member.id, book.id, due_date)
+                return True
+            return False
         except NoResultFound:
             return False
 
-    def get_balance(self, account_number: str) -> float:
-        """
-        Get the balance for a given account number
-        """
+    def return_book(self, isbn: str) -> Union[float, None]:
+        """Processes a book return, calculates fine if any."""
         try:
-            account = self._db.find_account_by(account_number=account_number)
-            return account.balance
+            book = self._db.find_book_by(isbn=isbn)
+            loan = self._db.find_active_loan_by(book_id=book.id)
+            self._db.update_book(book.id, is_available=True)
+            self._db.close_loan(loan.id)
+            
+            due_date = datetime.strptime(loan.due_date, "%Y-%m-%d")
+            if datetime.now() > due_date:
+                days_overdue = (datetime.now() - due_date).days
+                return days_overdue * 0.5  # $0.50 per day
+            return 0.0
         except NoResultFound:
-            raise ValueError("Account not found")
+            return None
 
-    def deposit(self, account_number: str, amount: float) -> None:
-        """
-        Deposit money into an account
-        """
+    def get_member_loans(self, member_id: str) -> list:
+        """Retrieves all active loans for a member."""
         try:
-            account = self._db.find_account_by(account_number=account_number)
-            new_balance = account.balance + amount
-            self._db.update_account(account.id, balance=new_balance)
+            member = self._db.find_member_by(member_id=member_id)
+            return self._db.get_active_loans_for_member(member.id)
         except NoResultFound:
-            raise ValueError("Account not found")
+            return []
 
-    def withdraw(self, account_number: str, amount: float) -> None:
-        """
-        Withdraw money from an account
-        """
-        try:
-            account = self._db.find_account_by(account_number=account_number)
-            if account.balance < amount:
-                raise ValueError("Insufficient funds")
-            new_balance = account.balance - amount
-            self._db.update_account(account.id, balance=new_balance)
-        except NoResultFound:
-            raise ValueError("Account not found")
+    def search_books(self, keyword: str) -> list:
+        """Searches for books by title or author."""
+        return self._db.search_books(keyword)
 
-    def close_account(self, account_number: str) -> None:
-        """
-        Close an account
-        """
+    def update_member_info(self, member_id: str, **kwargs) -> bool:
+        """Updates a member's information."""
         try:
-            account = self._db.find_account_by(account_number=account_number)
-            self._db.delete_account(account.id)
+            member = self._db.find_member_by(member_id=member_id)
+            self._db.update_member(member.id, **kwargs)
+            return True
         except NoResultFound:
-            raise ValueError("Account not found")
+            return False
