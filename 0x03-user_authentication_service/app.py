@@ -1,104 +1,117 @@
 #!/usr/bin/env python3
-"""A basic Flask app for managing a digital library."""
+"""
+A basic Flask app for managing a digital library
+"""
 
+from auth import Auth
 from flask import Flask, jsonify, request, abort, redirect
-from library_manager import LibraryManager
 
+AUTH = Auth()
 app = Flask(__name__)
-LIB = LibraryManager()
 
-@app.route("/", methods=["GET"], strict_slashes=False)
+
+@app.route('/', methods=['GET'], strict_slashes=False)
 def home() -> str:
     """GET /
     Return:
-        - The welcome message for the digital library.
+        - The welcome message for the digital library
     """
-    return jsonify({"message": "Welcome to our Digital Library"})
+    return jsonify({"message": "Bienvenue"}), 200
 
-@app.route("/books", methods=["POST"], strict_slashes=False)
-def add_book() -> str:
-    """POST /books
-    Return:
-        - The newly added book's information.
-    """
-    title, author, isbn = request.form.get("title"), request.form.get("author"), request.form.get("isbn")
-    try:
-        LIB.add_book(title, author, isbn)
-        return jsonify({"title": title, "message": "book added successfully"}), 201
-    except ValueError:
-        return jsonify({"message": "book already in library"}), 400
 
-@app.route("/members", methods=["POST"], strict_slashes=False)
-def register_member() -> str:
-    """POST /members
+@app.route('/users', methods=['POST'], strict_slashes=False)
+def users() -> str:
+    """POST /users
     Return:
-        - The new member's registration information.
+        - The account creation payload
     """
-    name, email = request.form.get("name"), request.form.get("email")
+    email = request.form.get('email')
+    password = request.form.get('password')
     try:
-        member = LIB.register_member(name, email)
-        return jsonify({"member_id": member.id, "message": "member registered"}), 201
-    except ValueError:
+        AUTH.register_user(email, password)
+        return jsonify({"email": f"{email}", "message": "user created"}), 200
+    except Exception:
         return jsonify({"message": "email already registered"}), 400
 
-@app.route("/loans", methods=["POST"], strict_slashes=False)
-def loan_book() -> str:
-    """POST /loans
-    Return:
-        - The book loan confirmation.
-    """
-    member_id, isbn = request.form.get("member_id"), request.form.get("isbn")
-    if LIB.loan_book(member_id, isbn):
-        return jsonify({"message": "book loaned successfully"}), 200
-    else:
-        abort(400)
 
-@app.route("/returns", methods=["POST"], strict_slashes=False)
-def return_book() -> str:
-    """POST /returns
+@app.route('/sessions', methods=['POST'], strict_slashes=False)
+def login() -> str:
+    """POST /sessions
     Return:
-        - The book return confirmation and any applicable fine.
+        - The account login payload
     """
-    isbn = request.form.get("isbn")
-    fine = LIB.return_book(isbn)
-    if fine is not None:
-        return jsonify({"message": "book returned", "fine": fine}), 200
-    else:
-        abort(400)
+    email = request.form.get('email')
+    password = request.form.get('password')
+    valid_login = AUTH.valid_login(email, password)
+    if not valid_login:
+        abort(401)
+    session_id = AUTH.create_session(email)
+    response = jsonify({"email": f"{email}", "message": "logged in"})
+    response.set_cookie('session_id', session_id)
+    return response
 
-@app.route("/member/<member_id>", methods=["GET"], strict_slashes=False)
-def get_member_loans(member_id: str) -> str:
-    """GET /member/<member_id>
-    Return:
-        - The member's current loans.
-    """
-    loans = LIB.get_member_loans(member_id)
-    if loans:
-        return jsonify({"member_id": member_id, "loans": loans}), 200
-    else:
-        abort(404)
 
-@app.route("/search", methods=["GET"], strict_slashes=False)
-def search_books() -> str:
-    """GET /search
+@app.route('/sessions', methods=['DELETE'], strict_slashes=False)
+def logout() -> str:
+    """DELETE /sessions
     Return:
-        - The search results for books.
+        - Redirects to home route
     """
-    keyword = request.args.get("q")
-    results = LIB.search_books(keyword)
-    return jsonify({"results": results}), 200
-
-@app.route("/member/<member_id>", methods=["PUT"], strict_slashes=False)
-def update_member_info(member_id: str) -> str:
-    """PUT /member/<member_id>
-    Return:
-        - Confirmation of member information update.
-    """
-    update_data = request.form.to_dict()
-    if LIB.update_member_info(member_id, **update_data):
-        return jsonify({"message": "member information updated"}), 200
+    session_id = request.cookies.get('session_id')
+    user = AUTH.get_user_from_session_id(session_id)
+    if user:
+        AUTH.destroy_session(user.id)
+        return redirect('/')
     else:
-        abort(404)
+        abort(403)
+
+
+@app.route('/profile', methods=['GET'], strict_slashes=False)
+def profile() -> str:
+    """GET /profile
+    Return:
+        - The user's profile information
+    """
+    session_id = request.cookies.get('session_id')
+    user = AUTH.get_user_from_session_id(session_id)
+    if user:
+        return jsonify({"email": user.email}), 200
+    else:
+        abort(403)
+
+
+@app.route('/reset_password', methods=['POST'], strict_slashes=False)
+def get_reset_password_token() -> str:
+    """POST /reset_password
+    Return:
+        - The user's password reset payload
+    """
+    email = request.form.get('email')
+    user = AUTH.create_session(email)
+    if not user:
+        abort(403)
+    else:
+        token = AUTH.get_reset_password_token(email)
+        return jsonify({"email": f"{email}", "reset_token": f"{token}"})
+
+
+@app.route('/reset_password', methods=['PUT'], strict_slashes=False)
+def update_password() -> str:
+    """PUT /reset_password
+
+    Return:
+        - The user's password updated payload
+    """
+    email = request.form.get('email')
+    reset_token = request.form.get('reset_token')
+    new_password = request.form.get('new_password')
+    try:
+        AUTH.update_password(reset_token, new_password)
+        return jsonify({"email": f"{email}",
+                        "message": "Password updated"}), 200
+    except Exception:
+        abort(403)
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port="5000")
